@@ -112,7 +112,7 @@ class IRPOS:
 		self.last_wrench = data
 		self.lw_lock.release()
 
-        def move_to_synchro_position(self, duration):
+    def move_to_synchro_position(self, duration):
 		print "[IRPOS] Move to synchro position"
 
 		self.conmanSwitch([self.robot_name+'mSplineTrajectoryGeneratorMotor'], [], True)

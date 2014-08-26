@@ -27,7 +27,7 @@ ForceSensor::ForceSensor(const std::string &name)
       offset_prop_("offset", "sensor zero offset", KDL::Wrench::Zero()),
       device_(NULL),
       slow_buffer_size_(100),
-      fast_buffer_size_(2),
+      fast_buffer_size_(10),
       slow_buffer_index_(0),
       fast_buffer_index_(0) {
 
