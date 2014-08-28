@@ -8,7 +8,11 @@ const double GEAR[NUMBER_OF_SERVOS] = { (1000 * 2 * 2 * M_PI) / 8.0, -158.0, 2
 //const double SYNCHRO_MOTOR_POSITION[NUMBER_OF_SERVOS] = { 0.0, -16.5, -4.012,
 //    -6.219, 158.997 + 0.5, 473 + 8, 769.7 };
 const double SYNCHRO_MOTOR_POSITION[NUMBER_OF_SERVOS] = { 0.0, -16.5, -4.012,
+<<<<<<< HEAD
     -6.219, 158.997 + 0.5, 473 , 769.7 };
+=======
+    -6.219, 158.997 + 0.5, 473 + 0, 769.7 };
+>>>>>>> 032ba36d8e89929485d97248ee8ffd207f6d4419
 const double THETA[NUMBER_OF_SERVOS] = { 0.0, 0.0, 2.203374e+02, 1.838348e+02,
     1.570796e+00, 0.0, 0.0 };
 
