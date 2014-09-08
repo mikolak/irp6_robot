@@ -87,7 +87,7 @@
           label: irp6ptfg
           ports_adresses: /dev/ttyMI14
           synchro_needed: 1
-          max_current: 200
+          max_current: 250
           max_increment: 1000.0
           card_indexes: 6
           enc_res: 128.0
