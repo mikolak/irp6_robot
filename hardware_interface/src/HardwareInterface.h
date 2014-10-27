@@ -8,6 +8,7 @@ using namespace RTT;
 
 typedef enum {
   NOT_SYNCHRONIZED,
+  PRE_SERVOING,
   SERVOING,
   PRE_SYNCHRONIZING,
   SYNCHRONIZING
@@ -29,15 +30,19 @@ class HardwareInterface : public RTT::TaskContext {
   std::vector<OutputPort<double>*> deltaInc_out_list_;
 
   std::vector<OutputPort<double>*> port_motor_position_list_;
+  std::vector<OutputPort<double>*> port_motor_increment_list_;
+  //std::vector<OutputPort<double>*> port_motor_voltage_list_;
+  std::vector<OutputPort<double>*> port_motor_current_list_;
 
   std::vector<InputPort<double>*> port_motor_position_command_list_;
 
-  Eigen::VectorXd motor_position_, motor_position_command_,
-      motor_position_command_old_;
+  Eigen::VectorXd motor_position_, motor_increment_, motor_current_, motor_position_command_,
+      motor_position_command_old_;//, motor_voltage_;
 
   std::vector<std::string> ports_adresses_;
   std::vector<int> max_current_;
   std::vector<double> max_increment_;
+  std::vector<double> max_desired_increment_;
   std::vector<unsigned int> card_indexes_;
   std::vector<double> enc_res_;
   std::vector<double> synchro_step_coarse_;
@@ -45,29 +50,28 @@ class HardwareInterface : public RTT::TaskContext {
   std::vector<bool> current_mode_;
   std::vector<bool> synchro_needed_;
 
-
-
-
   // Properties
   int number_of_drives_;
   bool auto_synchronize_;
   bool test_mode_;
+  int timeouts_to_print_;
   int tx_prefix_len_;
   int rwh_nsec_;
   hi_msgs::HardwareInterfacePort hi_port_param_[hi_moxa::MOXA_SERVOS_NR];
 
-
-
   int synchro_stop_iter_;
   int synchro_start_iter_;
+  int servo_start_iter_;
 
   double counter_;
 
   State state_;
   SynchroState synchro_state_;
   int synchro_drive_;
+  bool burst_mode_;
 
   std::vector<double> pos_inc_;
+  std::vector<double> max_pos_inc_;
 
   std::vector<double> increment_;
   std::vector<double> motor_pos_;

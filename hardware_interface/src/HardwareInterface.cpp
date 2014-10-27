@@ -11,6 +11,7 @@
 HardwareInterface::HardwareInterface(const std::string& name)
     : TaskContext(name, PreOperational),
       synchro_start_iter_(0),
+      servo_start_iter_(0),
       synchro_stop_iter_(0),
       test_mode_(0),
       counter_(0.0),
@@ -19,12 +20,15 @@ HardwareInterface::HardwareInterface(const std::string& name)
       synchro_drive_(0),
       tx_prefix_len_(0),
       synchro_state_(MOVE_TO_SYNCHRO_AREA),
-      rwh_nsec_(1200000) {
+      rwh_nsec_(1200000),
+      burst_mode_(true),
+      timeouts_to_print_(1) {
 
   this->addProperty("number_of_drives", number_of_drives_).doc(
       "Number of drives in robot");
   this->addProperty("auto_synchronize", auto_synchronize_).doc("");
   this->addProperty("test_mode", test_mode_).doc("");
+  this->addProperty("timeouts_to_print", timeouts_to_print_).doc("");
   this->addProperty("rwh_nsec", rwh_nsec_).doc("");
   this->addProperty("hi_port_param_0", hi_port_param_[0]).doc("");
   this->addProperty("hi_port_param_1", hi_port_param_[1]).doc("");
@@ -57,6 +61,9 @@ bool HardwareInterface::configureHook() {
   deltaInc_out_list_.resize(number_of_drives_);
   port_motor_position_command_list_.resize(number_of_drives_);
   port_motor_position_list_.resize(number_of_drives_);
+  port_motor_increment_list_.resize(number_of_drives_);
+  //port_motor_voltage_list_.resize(number_of_drives_);
+  port_motor_current_list_.resize(number_of_drives_);
 
   for (size_t i = 0; i < number_of_drives_; i++) {
     char computedReg_in_port_name[32];
@@ -93,6 +100,27 @@ bool HardwareInterface::configureHook() {
     this->ports()->addPort(MotorPosition_port_name,
                            *port_motor_position_list_[i]);
 
+    char MotorIncrement_port_name[32];
+    snprintf(MotorIncrement_port_name, sizeof(MotorIncrement_port_name),
+             "MotorIncrement_%s", hi_port_param_[i].label.c_str());
+    port_motor_increment_list_[i] = new typeof(*port_motor_increment_list_[i]);
+    this->ports()->addPort(MotorIncrement_port_name,
+                           *port_motor_increment_list_[i]);
+
+    /*char MotorVoltage_port_name[32];
+    snprintf(MotorVoltage_port_name, sizeof(MotorVoltage_port_name),
+             "MotorVoltage_%s", hi_port_param_[i].label.c_str());
+    port_motor_voltage_list_[i] = new typeof(*port_motor_voltage_list_[i]);
+    this->ports()->addPort(MotorVoltage_port_name,
+                           *port_motor_voltage_list_[i]);*/
+
+    char MotorCurrent_port_name[32];
+    snprintf(MotorCurrent_port_name, sizeof(MotorCurrent_port_name),
+             "MotorCurrent_%s", hi_port_param_[i].label.c_str());
+    port_motor_current_list_[i] = new typeof(*port_motor_current_list_[i]);
+    this->ports()->addPort(MotorCurrent_port_name,
+                           *port_motor_current_list_[i]);
+
   }
 
   // properties copying to internal buffers
@@ -100,6 +128,7 @@ bool HardwareInterface::configureHook() {
   ports_adresses_.resize(number_of_drives_);
   max_current_.resize(number_of_drives_);
   max_increment_.resize(number_of_drives_);
+  max_desired_increment_.resize(number_of_drives_);
   card_indexes_.resize(number_of_drives_);
   enc_res_.resize(number_of_drives_);
   synchro_step_coarse_.resize(number_of_drives_);
@@ -117,6 +146,8 @@ bool HardwareInterface::configureHook() {
     //   std::cout << "max_current_: "  << max_current_[i] << std::endl;
     max_increment_[i] = hi_port_param_[i].max_increment;
 //    std::cout << "max_increment_: "  << max_increment_[i] << std::endl;
+    max_desired_increment_[i] = hi_port_param_[i].max_desired_increment;
+//    std::cout << "max_desired_increment_: "  << max_desired_increment_[i] << std::endl;
     card_indexes_[i] = hi_port_param_[i].card_indexes;
     //   std::cout << "ports_adresses_: "  << ports_adresses_[i] << std::endl;
     enc_res_[i] = hi_port_param_[i].enc_res;
@@ -139,11 +170,14 @@ bool HardwareInterface::configureHook() {
 
   increment_.resize(number_of_drives_);
   pos_inc_.resize(number_of_drives_);
+
   pwm_or_current_.resize(number_of_drives_);
+  max_pos_inc_.resize(number_of_drives_);
 
   for (int i = 0; i < number_of_drives_; i++) {
     increment_[i] = 0;
     pwm_or_current_[0] = 0;
+    max_pos_inc_[i] = 0.0;
   }
 
   try {
@@ -177,6 +211,9 @@ bool HardwareInterface::configureHook() {
   }
 
   motor_position_.resize(number_of_drives_);
+  motor_increment_.resize(number_of_drives_);
+  //motor_voltage_.resize(number_of_drives_);
+  motor_current_.resize(number_of_drives_);
   motor_position_command_.resize(number_of_drives_);
   motor_position_command_old_.resize(number_of_drives_);
 
@@ -226,8 +263,8 @@ void HardwareInterface::test_mode_sleep() {
 bool HardwareInterface::startHook() {
   try {
     if (!test_mode_) {
-      hi_->write_read_hardware(rwh_nsec_);
-
+      hi_->write_read_hardware(rwh_nsec_, 0);
+      servo_start_iter_ = 200;
       if (!hi_->robot_synchronized()) {
         RTT::log(RTT::Info) << "Robot not synchronized" << RTT::endlog();
         if (auto_synchronize_) {
@@ -246,23 +283,29 @@ bool HardwareInterface::startHook() {
         RTT::log(RTT::Info) << "Robot synchronized" << RTT::endlog();
 
         for (int i = 0; i < number_of_drives_; i++) {
-          motor_position_command_(i) = (double) hi_->get_position(i)
-              * ((2.0 * M_PI) / enc_res_[i]);
-          motor_position_command_old_(i) = motor_position_command_(i);
+          motor_position_command_(i) = motor_position_command_old_(i) =
+              motor_position_(i) = (double) hi_->get_position(i)
+                  * ((2.0 * M_PI) / enc_res_[i]);
+          motor_increment_(i) = (double) hi_->get_increment(i);
+          //motor_voltage_(i) = (double) hi_->get_voltage(i);
+          motor_current_(i) = (double) hi_->get_current(i);
         }
 
-        state_ = SERVOING;
+        state_ = PRE_SERVOING;
       }
     } else {
       test_mode_sleep();
       RTT::log(RTT::Info) << "HI test mode activated" << RTT::endlog();
 
       for (int i = 0; i < number_of_drives_; i++) {
-        motor_position_command_(i) = 0.0;
-        motor_position_command_old_(i) = motor_position_command_(i);
+        motor_position_command_(i) = motor_position_command_old_(i) =
+            motor_position_(i) = 0.0;
+        motor_increment_(i) = 0.0;
+        //motor_voltage_(i) = 0.0;
+        motor_current_(i) = 0.0;
       }
 
-      state_ = SERVOING;
+      state_ = PRE_SERVOING;
     }
   } catch (const std::exception& e) {
     RTT::log(RTT::Error) << e.what() << RTT::endlog();
@@ -270,15 +313,15 @@ bool HardwareInterface::startHook() {
   }
 
   for (int i = 0; i < number_of_drives_; i++) {
-    pos_inc_[i] = 0.0;
-    if (!test_mode_) {
-      motor_position_(i) = (double) hi_->get_position(i)
-          * ((2.0 * M_PI) / enc_res_[i]);
-    } else {
-      motor_position_(i) = 0.0;
-    }
 
     port_motor_position_list_[i]->write(motor_position_[i]);
+    port_motor_increment_list_[i]->write(motor_increment_[i]);
+    //port_motor_voltage_list_[i]->write(motor_voltage_[i]);
+    port_motor_current_list_[i]->write(motor_current_[i]);
+  }
+
+  if (!test_mode_ && (!burst_mode_)) {
+    hi_->write_hardware();
   }
 
   return true;
@@ -286,12 +329,44 @@ bool HardwareInterface::startHook() {
 
 void HardwareInterface::updateHook() {
 
+  static int iteration_nr = 0;
+
+  iteration_nr++;
+
+  if (!test_mode_ && (!burst_mode_)) {
+
+    hi_->read_hardware(timeouts_to_print_);
+
+  }
+
   switch (state_) {
     case NOT_SYNCHRONIZED:
 
       for (int i = 0; i < number_of_drives_; i++) {
         pos_inc_[i] = 0.0;
       }
+      break;
+
+    case PRE_SERVOING:
+
+      if (!test_mode_) {
+        for (int i = 0; i < number_of_drives_; i++) {
+          motor_position_command_(i) = motor_position_command_old_(i) =
+              motor_position_(i) = (double) hi_->get_position(i)
+                  * ((2.0 * M_PI) / enc_res_[i]);
+          pos_inc_[i] = 0.0;
+          motor_increment_(i) = (double) hi_->get_increment(i);
+          //motor_voltage_(i) = (double) hi_->get_voltage(i);
+          motor_current_(i) = (double) hi_->get_current(i);
+        }
+
+      }
+
+      if ((servo_start_iter_--) <= 0) {
+        state_ = SERVOING;
+        std::cout << "Servoing started" << std::endl;
+      }
+
       break;
 
     case SERVOING:
@@ -413,7 +488,7 @@ void HardwareInterface::updateHook() {
                   ->get_position(i) * (2.0 * M_PI) / enc_res_[i];
             }
 
-            state_ = SERVOING;
+            state_ = PRE_SERVOING;
             RTT::log(RTT::Debug) << "[servo " << synchro_drive_
                                  << " ] SYNCHRONIZING ended" << RTT::endlog();
             std::cout << "synchro finished" << std::endl;
@@ -423,20 +498,36 @@ void HardwareInterface::updateHook() {
       break;
   }
 
+  // test maksymalnej wartosci zadanej
+  for (int i = 0; i < number_of_drives_; i++) {
+    if (fabs(pos_inc_[i]) > max_pos_inc_[i]) {
+      max_pos_inc_[i] = fabs(pos_inc_[i]);
+    }
+    /*
+     if (iteration_nr % 5000 == 0) {
+     std::cout << "axis i: " << i << " max_pos_inc_: " << max_pos_inc_[i]
+     << std::endl;
+     }
+     */
+
+  }
+
+  /*
+   if (iteration_nr % 5000 == 0) {
+   std::cout << "--------" << std::endl;
+   }
+   */
+
   if (!test_mode_) {
 
     for (int i = 0; i < number_of_drives_; i++) {
       increment_[i] = hi_->get_increment(i);
 
-      if (abs(increment_[i]) > 400) {
-        increment_[i] = 0;
-        std::cout << "very high increment_" << std::endl;
-      }
-
-      if (fabs(pos_inc_[i]) > 400) {
+      if (fabs(pos_inc_[i]) > max_desired_increment_[i]) {
         std::cout << "very high pos_inc_ i: " << i << " pos_inc: "
                   << pos_inc_[i] << std::endl;
-       // pos_inc_[i] = 0;
+        // pos_inc_[i] = 0;
+        hi_->set_hardware_panic();
       }
     }
 
@@ -465,22 +556,45 @@ void HardwareInterface::updateHook() {
 
     // std::cout << "aaaa: " << pwm_or_current_[0] << std::endl;
 
-    hi_->write_read_hardware(rwh_nsec_);
+    if (burst_mode_) {
+      hi_->write_read_hardware(rwh_nsec_, timeouts_to_print_);
+    }
 
     if (state_ == SERVOING) {
 
       for (int i = 0; i < number_of_drives_; i++) {
         motor_position_(i) = (double) hi_->get_position(i)
             * ((2.0 * M_PI) / enc_res_[i]);
+        motor_increment_(i) = (double) hi_->get_increment(i);
+        //motor_voltage_(i) = (double) hi_->get_voltage(i);
+        motor_current_(i) = (double) hi_->get_current(i);
 
         port_motor_position_list_[i]->write(motor_position_[i]);
+        port_motor_increment_list_[i]->write(motor_increment_[i]);
+        //port_motor_voltage_list_[i]->write(motor_voltage_[i]);
+        port_motor_current_list_[i]->write(motor_current_[i]);
       }
     }
+    if (!burst_mode_) {
+      hi_->write_hardware();
+    }
   } else {
+    for (int i = 0; i < number_of_drives_; i++) {
+      if (fabs(pos_inc_[i]) > max_desired_increment_[i]) {
+        std::cout << "very high pos_inc_ i: " << i << " pos_inc: "
+                  << pos_inc_[i] << std::endl;
+
+      }
+    }
+
     test_mode_sleep();
     for (int i = 0; i < number_of_drives_; i++) {
       motor_position_(i) = motor_position_command_(i);
+
       port_motor_position_list_[i]->write(motor_position_[i]);
+      port_motor_increment_list_[i]->write(motor_increment_[i]);
+      //port_motor_voltage_list_[i]->write(motor_voltage_[i]);
+      port_motor_current_list_[i]->write(motor_current_[i]);
     }
 
   }
